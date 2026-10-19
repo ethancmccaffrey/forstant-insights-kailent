@@ -1,4 +1,6 @@
 
+
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -10,6 +12,17 @@ const POSTS_PATH = "data/posts.json";
 const OWNER = process.env.GITHUB_OWNER || "ethancmccaffrey";
 const REPO = process.env.GITHUB_REPO || "forstant-insights-kailent";
 const BRANCH = process.env.GITHUB_BRANCH || "main";
+
+const PLATFORMS = [
+  "YouTube",
+  "Instagram",
+  "Facebook",
+  "Threads",
+  "X",
+  "Pinterest",
+  "Discord",
+  "Telegram",
+];
 
 function githubHeaders() {
   const headers = {
@@ -34,6 +47,7 @@ function jsonError(message, status = 400) {
 
 async function readArchive() {
   const url = `${contentsUrl()}?ref=${encodeURIComponent(BRANCH)}`;
+
   const response = await fetch(url, {
     headers: githubHeaders(),
     cache: "no-store",
@@ -67,12 +81,12 @@ export async function GET() {
   try {
     const { posts } = await readArchive();
 
-    const ordered = [...posts].sort(
-      (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-    );
+    const visiblePosts = posts
+      .filter((post) => post.platform !== "LinkedIn")
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
     return NextResponse.json(
-      { posts: ordered },
+      { posts: visiblePosts },
       {
         headers: {
           "Cache-Control": "no-store, max-age=0",
@@ -109,14 +123,15 @@ export async function POST(request) {
     return jsonError("Authorization failed.", 401);
   }
 
-  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const title =
+    typeof input.title === "string" ? input.title.trim() : "";
   const body = typeof input.body === "string" ? input.body.trim() : "";
   const category = input.category;
   const platform = input.platform;
   const weekStart = input.weekStart;
 
-  if (!title || title.length > 160) {
-    return jsonError("The title must contain between 1 and 160 characters.");
+  if (title.length > 160) {
+    return jsonError("The optional title cannot exceed 160 characters.");
   }
 
   if (!body || body.length > 20000) {
@@ -127,19 +142,7 @@ export async function POST(request) {
     return jsonError("Choose Platform, Email List, or Downloads.");
   }
 
-  const platforms = [
-    "YouTube",
-    "Instagram",
-    "Facebook",
-    "LinkedIn",
-    "Threads",
-    "X",
-    "Pinterest",
-    "Discord",
-    "Telegram",
-  ];
-
-  if (category === "platform" && !platforms.includes(platform)) {
+  if (category === "platform" && !PLATFORMS.includes(platform)) {
     return jsonError("Choose a supported platform.");
   }
 
@@ -164,7 +167,7 @@ export async function POST(request) {
   }
 
   const post = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     title,
     body,
     category,
@@ -183,7 +186,7 @@ export async function POST(request) {
     ).toString("base64");
 
     const commitPayload = {
-      message: `Publish Insights post: ${title}`,
+      message: `Publish Insights post${title ? `: ${title}` : ""}`,
       content: contents,
       branch: BRANCH,
     };
