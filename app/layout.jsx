@@ -3,8 +3,12 @@ import "./globals.css";
 
 export const metadata = {
   title: "Forstant Insights for Kailent",
-  description:
-    "A disciplined view of Kailent's reach, engagement, growth, and impact.",
+  description: "Kailent growth analytics by Forstant Labs.",
+  applicationName: "Forstant Insights for Kailent",
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default function RootLayout({ children }) {
