@@ -7,5 +7,14 @@
     "platform": "YouTube",
     "weekStart": "2026-10-19",
     "createdAt": "2026-10-21T18:58:02.281Z"
+  },
+  {
+    "id": "7a70a176-c9a2-4fe9-8d6c-970e24f5899d",
+    "title": "",
+    "body": "The United States has been founded",
+    "category": "platform",
+    "platform": "YouTube",
+    "weekStart": "1776-07-01",
+    "createdAt": "2026-10-21T19:09:39.816Z"
   }
 ]
