@@ -1,77 +1,63 @@
-
-
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const POST_AUTH_KEY = "SOPHISTICATED";
-const POSTS_PATH = "data/posts.json";
-
 const OWNER = process.env.GITHUB_OWNER || "ethancmccaffrey";
 const REPO = process.env.GITHUB_REPO || "forstant-insights-kailent";
 const BRANCH = process.env.GITHUB_BRANCH || "main";
+const POSTS_PATH = process.env.GITHUB_POSTS_PATH || "data/posts.json";
 
 const PLATFORMS = [
   "YouTube",
   "Instagram",
   "Facebook",
   "Threads",
-  "X",
-  "Pinterest",
   "Discord",
   "Telegram",
 ];
 
 function githubHeaders() {
-  const headers = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-
-  if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  if (!process.env.GITHUB_TOKEN) {
+    throw new Error("GitHub publishing is not configured.");
   }
 
-  return headers;
+  return {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+  };
 }
 
 function contentsUrl() {
   return `https://api.github.com/repos/${encodeURIComponent(OWNER)}/${encodeURIComponent(REPO)}/contents/${POSTS_PATH}`;
 }
 
-function jsonError(message, status = 400) {
+function errorResponse(message, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
 async function readArchive() {
-  const url = `${contentsUrl()}?ref=${encodeURIComponent(BRANCH)}`;
+  const response = await fetch(
+    `${contentsUrl()}?ref=${encodeURIComponent(BRANCH)}`,
+    { headers: githubHeaders(), cache: "no-store" }
+  );
 
-  const response = await fetch(url, {
-    headers: githubHeaders(),
-    cache: "no-store",
-  });
-
-  if (response.status === 404) {
-    return { posts: [], sha: null };
-  }
+  if (response.status === 404) return { posts: [], sha: null };
 
   if (!response.ok) {
-    throw new Error(`GitHub could not read the archive (${response.status}).`);
+    throw new Error(`GitHub archive read failed (${response.status}).`);
   }
 
   const file = await response.json();
-
-  if (file.type !== "file" || !file.content) {
-    throw new Error("The post archive was not returned as a file.");
-  }
-
-  const decoded = Buffer.from(file.content, "base64").toString("utf8");
-  const posts = JSON.parse(decoded);
+  const posts = JSON.parse(
+    Buffer.from(file.content || "", "base64").toString("utf8")
+  );
 
   if (!Array.isArray(posts)) {
-    throw new Error("The post archive must contain a JSON array.");
+    throw new Error("The blog archive must contain a JSON array.");
   }
 
   return { posts, sha: file.sha };
@@ -81,34 +67,27 @@ export async function GET() {
   try {
     const { posts } = await readArchive();
 
-    const visiblePosts = posts
-      .filter((post) => post.platform !== "LinkedIn")
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
     return NextResponse.json(
-      { posts: visiblePosts },
       {
-        headers: {
-          "Cache-Control": "no-store, max-age=0",
-        },
-      }
+        posts: posts
+          .filter((post) => PLATFORMS.includes(post.platform) || !post.platform)
+          .sort(
+            (a, b) =>
+              new Date(a.createdAt).getTime() -
+              new Date(b.createdAt).getTime()
+          ),
+      },
+      { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
-    console.error("Post archive read failed:", error);
-
-    return jsonError(
-      "The published post archive could not be loaded. Check the GitHub repository and archive file.",
-      502
-    );
+    console.error("Blog read failed:", error);
+    return errorResponse("The published blog archive could not be loaded.", 502);
   }
 }
 
 export async function POST(request) {
-  if (!process.env.GITHUB_TOKEN) {
-    return jsonError(
-      "Publishing is not configured yet. A private GITHUB_TOKEN must be set in the server environment.",
-      503
-    );
+  if (!process.env.POST_AUTH_KEY) {
+    return errorResponse("POST_AUTH_KEY is not configured.", 503);
   }
 
   let input;
@@ -116,54 +95,51 @@ export async function POST(request) {
   try {
     input = await request.json();
   } catch {
-    return jsonError("The request body must be valid JSON.");
+    return errorResponse("The request must contain valid JSON.");
   }
 
-  if (input?.authorizationKey !== POST_AUTH_KEY) {
-    return jsonError("Authorization failed.", 401);
+  if (
+    typeof input?.authorizationKey !== "string" ||
+    input.authorizationKey !== process.env.POST_AUTH_KEY
+  ) {
+    return errorResponse("Authorization failed.", 401);
   }
 
-  const title =
-    typeof input.title === "string" ? input.title.trim() : "";
+  const title = typeof input.title === "string" ? input.title.trim() : "";
   const body = typeof input.body === "string" ? input.body.trim() : "";
-  const category = input.category;
-  const platform = input.platform;
-  const weekStart = input.weekStart;
+  const { category, platform, weekStart } = input;
 
   if (title.length > 160) {
-    return jsonError("The optional title cannot exceed 160 characters.");
+    return errorResponse("The optional title cannot exceed 160 characters.");
   }
 
   if (!body || body.length > 20000) {
-    return jsonError("The post body must contain between 1 and 20,000 characters.");
+    return errorResponse("The post must contain 1–20,000 characters.");
   }
 
   if (!["platform", "email", "downloads"].includes(category)) {
-    return jsonError("Choose Platform, Email List, or Downloads.");
+    return errorResponse("Choose a valid post category.");
   }
 
   if (category === "platform" && !PLATFORMS.includes(platform)) {
-    return jsonError("Choose a supported platform.");
+    return errorResponse("Choose a supported platform.");
   }
 
   if (
     typeof weekStart !== "string" ||
     !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)
   ) {
-    return jsonError("Choose a valid reporting week.");
+    return errorResponse("The reporting week must be a valid date.");
   }
 
   const date = new Date(`${weekStart}T12:00:00Z`);
 
   if (
     Number.isNaN(date.getTime()) ||
-    date.toISOString().slice(0, 10) !== weekStart
+    date.toISOString().slice(0, 10) !== weekStart ||
+    date.getUTCDay() !== 1
   ) {
-    return jsonError("The reporting week is not a valid date.");
-  }
-
-  if (date.getUTCDay() !== 1) {
-    return jsonError("The reporting week must start on a Monday.");
+    return errorResponse("The reporting week must start on a Monday.");
   }
 
   const post = {
@@ -180,45 +156,32 @@ export async function POST(request) {
     const archive = await readArchive();
     const updatedPosts = [...archive.posts, post];
 
-    const contents = Buffer.from(
-      `${JSON.stringify(updatedPosts, null, 2)}\n`,
-      "utf8"
-    ).toString("base64");
-
-    const commitPayload = {
+    const payload = {
       message: `Publish Insights post${title ? `: ${title}` : ""}`,
-      content: contents,
+      content: Buffer.from(
+        `${JSON.stringify(updatedPosts, null, 2)}\n`,
+        "utf8"
+      ).toString("base64"),
       branch: BRANCH,
+      ...(archive.sha ? { sha: archive.sha } : {}),
     };
-
-    if (archive.sha) {
-      commitPayload.sha = archive.sha;
-    }
 
     const response = await fetch(contentsUrl(), {
       method: "PUT",
-      headers: {
-        ...githubHeaders(),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(commitPayload),
+      headers: githubHeaders(),
+      body: JSON.stringify(payload),
       cache: "no-store",
     });
 
     if (!response.ok) {
-      const detail = await response.text();
-      console.error("GitHub commit failed:", response.status, detail);
+      const details = await response.text();
+      console.error("GitHub blog commit failed:", response.status, details);
 
-      if (response.status === 409 || response.status === 422) {
-        return jsonError(
-          "The archive changed or GitHub rejected the commit. Reload the site and try again.",
-          409
-        );
-      }
-
-      return jsonError(
-        "GitHub could not save the post. Check repository permissions and branch settings.",
-        502
+      return errorResponse(
+        response.status === 409 || response.status === 422
+          ? "GitHub rejected the archive update. Reload and try again."
+          : "GitHub could not save the post. Check repository permissions.",
+        response.status === 409 || response.status === 422 ? 409 : 502
       );
     }
 
@@ -228,16 +191,12 @@ export async function POST(request) {
       {
         post,
         commit: result.commit?.sha || null,
-        message: "Post committed to the repository.",
+        message: "Post saved to GitHub.",
       },
       { status: 201 }
     );
   } catch (error) {
-    console.error("Post publication failed:", error);
-
-    return jsonError(
-      "The post could not be published. Check the server logs and GitHub configuration.",
-      502
-    );
+    console.error("Blog publication failed:", error);
+    return errorResponse("The post could not be published.", 502);
   }
 }
